@@ -1,0 +1,30 @@
+{
+  "name": "session-hours-backend",
+  "version": "1.0.0",
+  "description": "Backend API for monthly session hours report",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js"
+  },
+  "keywords": [
+    "express",
+    "sql-server",
+    "report"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.18",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "helmet": "^7.2.0",
+    "mssql": "^11.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
