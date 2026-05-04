@@ -17,7 +17,8 @@ module.exports = {
     password: process.env.DB_PASSWORD,
     port: Number(process.env.DB_PORT) || 1433,
     connectionTimeoutMs: Number(process.env.DB_CONNECTION_TIMEOUT_MS) || 30000,
-    requestTimeoutMs: Number(process.env.DB_REQUEST_TIMEOUT_MS) || 120000,
+    /* Per-query cap for tedious; heavy views often exceed 120s — override with DB_REQUEST_TIMEOUT_MS */
+    requestTimeoutMs: Number(process.env.DB_REQUEST_TIMEOUT_MS) || 600000,
     encrypt: toBool(process.env.DB_ENCRYPT, false),
     trustServerCertificate: toBool(process.env.DB_TRUST_SERVER_CERTIFICATE, true)
   },

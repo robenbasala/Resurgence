@@ -5,9 +5,10 @@ const {
 } = require("../repositories/reportRepository");
 const { getMonthRange, getMonthSpanRange } = require("../utils/date");
 
-function createPatientRow(baseRecord) {
+function createPatientRow(baseRecord, rowGroupKey) {
   return {
     uniqueKey: baseRecord.UniqueKey ?? null,
+    rowGroupKey: rowGroupKey ?? null,
     mrNumber: String(baseRecord.mrNumber ?? ""),
     patientId: baseRecord.PatientId ?? null,
     name: baseRecord.Name ?? "",
@@ -66,7 +67,7 @@ async function getMonthlyReport({ year, month, fromYear, fromMonth, toYear, toMo
   for (const record of records) {
     const rowKey = buildRowGroupKey(record);
     if (!rowMap.has(rowKey)) {
-      rowMap.set(rowKey, createPatientRow(record));
+      rowMap.set(rowKey, createPatientRow(record, rowKey));
     }
 
     const row = rowMap.get(rowKey);

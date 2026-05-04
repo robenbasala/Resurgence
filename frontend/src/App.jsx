@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import FiltersBar from "./components/FiltersBar";
 import ReportTable from "./components/ReportTable";
-import { fetchReport, fetchReportMeta } from "./api/reportApi";
+import CellDetailPanel from "./components/CellDetailPanel";
+import { fetchCellAnnotations, fetchReport, fetchReportMeta, saveCellAnnotation } from "./api/reportApi";
 import { exportReportToCsv } from "./utils/csv";
+import { buildCellStateKey, getCellStateEntry, normalizeCellState } from "./utils/cellStateStorage";
 
 const initialNow = dayjs();
 
@@ -50,6 +52,78 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [viewMode, setViewMode] = useState("virtualized");
+  const [cellSelection, setCellSelection] = useState(null);
+  const [cellPanelOpen, setCellPanelOpen] = useState(true);
+  const [cellAnnotations, setCellAnnotations] = useState({});
+  const [annotationError, setAnnotationError] = useState("");
+  const cellAnnotationsRef = useRef(cellAnnotations);
+
+  useEffect(() => {
+    cellAnnotationsRef.current = cellAnnotations;
+  }, [cellAnnotations]);
+
+  const onDayCellClick = useCallback((payload) => {
+    const h = payload?.dayHours;
+    const isZero =
+      h !== undefined && h !== null && Number.isFinite(Number(h)) && Number(h) === 0;
+    setCellSelection(payload);
+    if (isZero) {
+      setCellPanelOpen(false);
+    } else {
+      setCellPanelOpen(true);
+    }
+  }, []);
+
+  const selectionStorageKey = useMemo(() => {
+    if (!cellSelection?.mrNumber || !cellSelection?.date) return null;
+    return buildCellStateKey({
+      mrNumber: cellSelection.mrNumber,
+      date: cellSelection.date,
+      authStart: cellSelection.authStart,
+      authEnd: cellSelection.authEnd,
+      authorizationNumber: cellSelection.authorizationNumber,
+      locSummary: cellSelection.locSummary,
+      patientId: cellSelection.patientId
+    });
+  }, [cellSelection]);
+
+  const selectionAnnotation = useMemo(() => {
+    if (!selectionStorageKey) return { completed: false, notes: [] };
+    return getCellStateEntry(cellAnnotations, selectionStorageKey) || { completed: false, notes: [] };
+  }, [cellAnnotations, selectionStorageKey]);
+
+  const onCellStateChange = useCallback(
+    async (patch) => {
+      if (!selectionStorageKey || !cellSelection) return;
+      setAnnotationError("");
+      const prev = cellAnnotationsRef.current;
+      const cur = getCellStateEntry(prev, selectionStorageKey) || { completed: false, notes: [] };
+      const nextEntry = normalizeCellState({
+        completed: patch.completed !== undefined ? Boolean(patch.completed) : cur.completed,
+        notes: patch.notes !== undefined ? patch.notes : cur.notes
+      });
+      try {
+        await saveCellAnnotation({
+          cellKey: selectionStorageKey,
+          mrNumber: cellSelection.mrNumber,
+          cellDate: cellSelection.date,
+          authStart: cellSelection.authStart || null,
+          authEnd: cellSelection.authEnd || null,
+          authorizationNumber: cellSelection.authorizationNumber || null,
+          locSummary: cellSelection.locSummary || null,
+          patientId: cellSelection.patientId != null ? String(cellSelection.patientId) : null,
+          completed: nextEntry.completed,
+          notes: nextEntry.notes
+        });
+        setCellAnnotations((p) => ({ ...p, [selectionStorageKey]: nextEntry }));
+      } catch (e) {
+        const apiMsg = e?.response?.data?.error?.message;
+        setAnnotationError(apiMsg || e?.message || "Failed to save cell.");
+        throw e;
+      }
+    },
+    [selectionStorageKey, cellSelection]
+  );
 
   useEffect(() => {
     async function loadMeta() {
@@ -77,11 +151,35 @@ export default function App() {
     async function loadReport() {
       setLoading(true);
       setError("");
+      setAnnotationError("");
+      setCellAnnotations({});
       try {
         const data = await fetchReport(appliedFilters);
         setReport(data);
+        try {
+          const ann = await fetchCellAnnotations(appliedFilters);
+          const map = ann?.annotations && typeof ann.annotations === "object" ? ann.annotations : {};
+          setCellAnnotations(map);
+        } catch (annErr) {
+          const apiMsg = annErr?.response?.data?.error?.message;
+          setAnnotationError(
+            apiMsg ||
+              annErr?.message ||
+              "Could not load saved cell notes from the server. Complete and notes may be out of date until you reload."
+          );
+          setCellAnnotations({});
+        }
       } catch (e) {
-        setError(e?.response?.data?.error?.message || "Failed to load report data.");
+        const apiMsg = e?.response?.data?.error?.message;
+        const netMsg = e?.message;
+        setError(
+          apiMsg ||
+            (netMsg && netMsg !== "Network Error" ? netMsg : null) ||
+            (e?.code === "ERR_NETWORK" || e?.message === "Network Error"
+              ? "Cannot reach the API server. Is the backend running and VITE_API_BASE_URL correct?"
+              : null) ||
+            "Failed to load report data."
+        );
       } finally {
         setLoading(false);
       }
@@ -126,6 +224,8 @@ export default function App() {
       ? { year: filters.fromYear, month: filters.fromMonth }
       : { year: filters.toYear, month: filters.toMonth };
 
+    setCellSelection(null);
+    setCellPanelOpen(true);
     setAppliedFilters({
       fromYear: normalizedFrom.year,
       fromMonth: normalizedFrom.month,
@@ -176,6 +276,12 @@ export default function App() {
           loading={loading}
         />
 
+        {annotationError && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
+            {annotationError}
+          </div>
+        )}
+
         {loading && (
           <div
             className="flex flex-col items-center justify-center gap-5 rounded-2xl border border-slate-200/80 bg-white/80 py-16 shadow-[0_8px_30px_-12px_rgba(15,118,110,0.12)] backdrop-blur-sm"
@@ -221,7 +327,41 @@ export default function App() {
           )}
 
         {!loading && !error && hasGenerated && displayReport.rows.length > 0 && (
-          <ReportTable report={displayReport} virtualized={viewMode === "virtualized"} />
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+            <div className="min-w-0 flex-1">
+              <ReportTable
+                report={displayReport}
+                virtualized={viewMode === "virtualized"}
+                onDayCellClick={onDayCellClick}
+                cellAnnotations={cellAnnotations}
+              />
+            </div>
+            {cellPanelOpen ? (
+              <CellDetailPanel
+                selection={cellSelection}
+                onCollapse={() => setCellPanelOpen(false)}
+                cellStateKey={selectionStorageKey}
+                cellNotes={selectionAnnotation.notes}
+                cellCompleted={selectionAnnotation.completed}
+                onCellStateChange={onCellStateChange}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setCellPanelOpen(true)}
+                className="flex min-h-[200px] w-full shrink-0 flex-row items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-4 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 lg:sticky lg:top-4 lg:min-h-[min(70vh,560px)] lg:w-11 lg:flex-col lg:px-1 lg:py-6"
+                aria-label="Open cell details panel"
+              >
+                <span className="hidden text-slate-500 lg:inline" style={{ writingMode: "vertical-rl" }} aria-hidden>
+                  Cell
+                </span>
+                <span className="lg:hidden">Open cell panel</span>
+                <span className="text-lg text-slate-400" aria-hidden>
+                  ◀
+                </span>
+              </button>
+            )}
+          </div>
         )}
       </div>
     </main>

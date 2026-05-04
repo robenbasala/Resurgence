@@ -1,7 +1,8 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useCallback } from "react";
 import dayjs from "dayjs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { getCellStyle } from "../utils/reportCell";
+import { buildCellStateKey, cellHasNotes, getCellStateEntry } from "../utils/cellStateStorage";
 
 const FIXED_COLUMNS = [
   { key: "mrNumber", label: "MR Number", width: 130 },
@@ -61,8 +62,34 @@ function formatHours(value) {
   return Number.isFinite(numberValue) ? numberValue.toFixed(2).replace(/\.?0+$/, "") : "0";
 }
 
-export default function ReportTable({ report, virtualized = true }) {
+function activeNotesForPreview(ann) {
+  if (!ann?.notes?.length) return [];
+  return ann.notes.filter((n) => n && !n.deleted && String(n.body || "").trim());
+}
+
+export default function ReportTable({ report, virtualized = true, onDayCellClick, cellAnnotations = {} }) {
   const scrollRef = useRef(null);
+  const interactiveDayCells = typeof onDayCellClick === "function";
+  const handleDayCellActivate = useCallback(
+    (row, dayKey) => {
+      if (!interactiveDayCells) return;
+      const entry = row.dailyEntries?.[dayKey];
+      const dayHours = Number(entry?.hours ?? 0);
+      onDayCellClick({
+        mrNumber: row.mrNumber,
+        date: dayKey,
+        name: row.name,
+        patientId: row.patientId,
+        authStart: row.authStart,
+        authEnd: row.authEnd,
+        authorizationNumber: row.authorizationNumber,
+        locSummary: row.locSummary,
+        rowGroupKey: row.rowGroupKey,
+        dayHours
+      });
+    },
+    [interactiveDayCells, onDayCellClick]
+  );
   const dayHeaders = useMemo(
     () => report.days.map((day) => ({ key: day, label: dayjs(day).format("M/D") })),
     [report.days]
@@ -83,8 +110,11 @@ export default function ReportTable({ report, virtualized = true }) {
 
   const dayHeaderCellClass =
     "shrink-0 border border-slate-200 bg-slate-100 px-2 py-2 text-center text-sm font-semibold text-slate-700 box-border";
-  const dayBodyCellClass =
-    "shrink-0 box-border border border-slate-200 px-2 py-2 text-center text-sm font-medium";
+  const dayBodyCellClass = `shrink-0 box-border border border-slate-200 px-2 py-2 text-center text-sm font-medium align-middle${
+    interactiveDayCells ? " cursor-pointer select-none hover:brightness-[0.97]" : ""
+  }`;
+  const dayBodyInnerClass =
+    "relative flex min-h-[2.75rem] w-full flex-col items-center justify-center text-center";
   const dayColStyleFlex = {
     width: dayColumnWidth,
     minWidth: dayColumnWidth,
@@ -121,26 +151,79 @@ export default function ReportTable({ report, virtualized = true }) {
       discharge: row.discharge,
       loc
     });
+    const cellKey = buildCellStateKey({
+      mrNumber: row.mrNumber,
+      date: dayKey,
+      authStart: row.authStart,
+      authEnd: row.authEnd,
+      authorizationNumber: row.authorizationNumber,
+      locSummary: row.locSummary,
+      patientId: row.patientId
+    });
+    const ann = getCellStateEntry(cellAnnotations, cellKey);
 
     return (
       <div
-        key={`${row.mrNumber}-${dayKey}`}
+        key={`${row.rowGroupKey ?? row.mrNumber}-${dayKey}`}
         className={dayBodyCellClass}
         style={{
           ...style,
           ...dayColStyleFlex
         }}
+        role={interactiveDayCells ? "button" : undefined}
+        tabIndex={interactiveDayCells ? 0 : undefined}
+        onClick={interactiveDayCells ? () => handleDayCellActivate(row, dayKey) : undefined}
+        onKeyDown={
+          interactiveDayCells
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleDayCellActivate(row, dayKey);
+                }
+              }
+            : undefined
+        }
         title={[
           `Name: ${row.name}`,
           `MR: ${row.mrNumber}`,
           `Date: ${dayKey}`,
+          `Auth: ${row.authStart || "-"} – ${row.authEnd || "-"}`,
+          `Auth #: ${row.authorizationNumber || "-"}`,
+          `LOC: ${row.locSummary || loc || "-"}`,
           `Hours: ${formatHours(hours)}`,
-          `LOC: ${loc || "-"}`,
           `Admit: ${row.admit || "-"}`,
-          `Discharge: ${row.discharge || "-"}`
-        ].join("\n")}
+          `Discharge: ${row.discharge || "-"}`,
+          ann && cellHasNotes(ann)
+            ? `Notes (${activeNotesForPreview(ann).length}): ${activeNotesForPreview(ann)
+                .slice(0, 3)
+                .map((n) => String(n.body || "").replace(/\s+/g, " ").trim())
+                .join(" · ")
+                .slice(0, 220)}${activeNotesForPreview(ann).length > 3 ? "…" : ""}`
+            : null,
+          ann?.completed ? "Complete" : null
+        ]
+          .filter(Boolean)
+          .join("\n")}
       >
-        {formatHours(hours)}
+        <div className={dayBodyInnerClass}>
+          <span className="tabular-nums">{formatHours(hours)}</span>
+          {ann?.completed ? (
+            <span
+              className="pointer-events-none absolute bottom-0.5 right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
+              title="Complete"
+              aria-hidden
+            >
+              ✓
+            </span>
+          ) : null}
+          {ann && cellHasNotes(ann) ? (
+            <span
+              className="pointer-events-none absolute left-0.5 top-0.5 h-2 w-2 rounded-full bg-amber-500 ring-1 ring-white"
+              title={`${activeNotesForPreview(ann).length} note(s)`}
+              aria-hidden
+            />
+          ) : null}
+        </div>
       </div>
     );
   };
@@ -156,23 +239,76 @@ export default function ReportTable({ report, virtualized = true }) {
       discharge: row.discharge,
       loc
     });
+    const cellKey = buildCellStateKey({
+      mrNumber: row.mrNumber,
+      date: dayKey,
+      authStart: row.authStart,
+      authEnd: row.authEnd,
+      authorizationNumber: row.authorizationNumber,
+      locSummary: row.locSummary,
+      patientId: row.patientId
+    });
+    const ann = getCellStateEntry(cellAnnotations, cellKey);
 
     return (
       <td
-        key={`${row.mrNumber}-${dayKey}`}
+        key={`${row.rowGroupKey ?? row.mrNumber}-${dayKey}`}
         className={dayBodyCellClass}
         style={{ ...style, ...dayColStyleTable }}
+        role={interactiveDayCells ? "button" : undefined}
+        tabIndex={interactiveDayCells ? 0 : undefined}
+        onClick={interactiveDayCells ? () => handleDayCellActivate(row, dayKey) : undefined}
+        onKeyDown={
+          interactiveDayCells
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleDayCellActivate(row, dayKey);
+                }
+              }
+            : undefined
+        }
         title={[
           `Name: ${row.name}`,
           `MR: ${row.mrNumber}`,
           `Date: ${dayKey}`,
+          `Auth: ${row.authStart || "-"} – ${row.authEnd || "-"}`,
+          `Auth #: ${row.authorizationNumber || "-"}`,
+          `LOC: ${row.locSummary || loc || "-"}`,
           `Hours: ${formatHours(hours)}`,
-          `LOC: ${loc || "-"}`,
           `Admit: ${row.admit || "-"}`,
-          `Discharge: ${row.discharge || "-"}`
-        ].join("\n")}
+          `Discharge: ${row.discharge || "-"}`,
+          ann && cellHasNotes(ann)
+            ? `Notes (${activeNotesForPreview(ann).length}): ${activeNotesForPreview(ann)
+                .slice(0, 3)
+                .map((n) => String(n.body || "").replace(/\s+/g, " ").trim())
+                .join(" · ")
+                .slice(0, 220)}${activeNotesForPreview(ann).length > 3 ? "…" : ""}`
+            : null,
+          ann?.completed ? "Complete" : null
+        ]
+          .filter(Boolean)
+          .join("\n")}
       >
-        {formatHours(hours)}
+        <div className={dayBodyInnerClass}>
+          <span className="tabular-nums">{formatHours(hours)}</span>
+          {ann?.completed ? (
+            <span
+              className="pointer-events-none absolute bottom-0.5 right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
+              title="Complete"
+              aria-hidden
+            >
+              ✓
+            </span>
+          ) : null}
+          {ann && cellHasNotes(ann) ? (
+            <span
+              className="pointer-events-none absolute left-0.5 top-0.5 h-2 w-2 rounded-full bg-amber-500 ring-1 ring-white"
+              title={`${activeNotesForPreview(ann).length} note(s)`}
+              aria-hidden
+            />
+          ) : null}
+        </div>
       </td>
     );
   };
@@ -180,7 +316,7 @@ export default function ReportTable({ report, virtualized = true }) {
   const renderFixedCells = (row) =>
     FIXED_COLUMNS.map((column, index) => (
       <div
-        key={`${row.mrNumber}-${column.key}`}
+        key={`${row.rowGroupKey ?? row.mrNumber}-${column.key}`}
         className={`${cellClass} sticky z-20 shrink-0 bg-white`}
         style={{
           left: `${LEFT_OFFSETS[index]}px`,
@@ -233,7 +369,7 @@ export default function ReportTable({ report, virtualized = true }) {
               const row = report.rows[virtualRow.index];
               return (
                 <div
-                  key={`${row.mrNumber}-${virtualRow.index}`}
+                  key={`${row.rowGroupKey ?? row.mrNumber}-${virtualRow.index}`}
                   className="absolute left-0 top-0 flex w-max min-w-full hover:bg-slate-50"
                   style={{
                     transform: `translateY(${virtualRow.start}px)`,
@@ -289,7 +425,7 @@ export default function ReportTable({ report, virtualized = true }) {
                 const groupStart = rowSpanMeta.startByRowIndex[index] === index;
                 const rowSpan = rowSpanMeta.spansByStartIndex[index] || 1;
                 return (
-                  <tr key={`${row.mrNumber}-${index}`} className="hover:bg-slate-50">
+                  <tr key={`${row.rowGroupKey ?? row.mrNumber}-${index}`} className="hover:bg-slate-50">
                     {groupStart && (
                       <td
                         rowSpan={rowSpan}

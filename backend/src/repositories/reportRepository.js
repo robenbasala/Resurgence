@@ -1,5 +1,8 @@
 const dayjs = require("dayjs");
+const utc = require("dayjs/plugin/utc");
 const { getPool, sql } = require("../config/db");
+
+dayjs.extend(utc);
 const { sessionHoursView } = require("../config/env");
 
 function assertSafeViewName(viewName) {
@@ -64,9 +67,22 @@ async function fetchAvailableYears() {
     .filter((item) => Number.isInteger(item));
 }
 
+/**
+ * Calendar YYYY-MM-DD for SQL date/datetime values.
+ * mssql often returns JS Date at UTC midnight for a SQL `date`; using local dayjs shifts
+ * one day behind in US timezones (e.g. 2025-12-26Z → "2025-12-25"). Use UTC calendar date.
+ */
 function normalizeDate(dateValue) {
-  if (!dateValue) return null;
-  return dayjs(dateValue).format("YYYY-MM-DD");
+  if (dateValue == null || dateValue === "") return null;
+
+  if (typeof dateValue === "string") {
+    const m = String(dateValue).trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+  }
+
+  const d = dayjs.utc(dateValue);
+  if (!d.isValid()) return null;
+  return d.format("YYYY-MM-DD");
 }
 
 module.exports = {
