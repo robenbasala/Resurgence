@@ -7,8 +7,7 @@ async function fetchEvaluationsForCell({ mrNumber, date }) {
   request.input("cellDate", sql.Date, date);
 
   /*
-   * Kipu list: billable + completed only; MR from patients; calendar day = local date of start_time
-   * (same idea as CAST(DATEADD(HOUR, 0, start_time) AS DATE) in source list query).
+   * Kipu list: billable evaluations for the day; keep all statuses so pending can be shown in UI.
    */
   const query = `
     SELECT TOP (500)
@@ -30,6 +29,7 @@ async function fetchEvaluationsForCell({ mrNumber, date }) {
       el.end_time,
       el.CompanyId,
       el.patient_casefile_id,
+      el.name AS Name,
       p.mr_number,
       el.status,
       el.billable,
@@ -43,7 +43,6 @@ async function fetchEvaluationsForCell({ mrNumber, date }) {
     FROM dbo.Kipu_EvaluationsList AS el
     INNER JOIN dbo.Kipu_PatientsList AS p ON el.patient_casefile_id = p.casefile_id
     WHERE el.billable = 1
-      AND el.status = N'Completed'
       AND LTRIM(RTRIM(CAST(p.mr_number AS nvarchar(100)))) = LTRIM(RTRIM(@mrNumber))
       AND CAST(DATEADD(HOUR, 0, el.start_time) AS DATE) = @cellDate
     ORDER BY el.start_time
@@ -72,15 +71,19 @@ async function fetchSessionsForCell({ mrNumber, date }) {
       sp.UpdateVersion,
       sp.IsDeleted,
       p.mr_number,
+      ks.GroupSessionTitle,
       CONVERT(date, DATEADD(HOUR, -8, sp.SessionEndTime)) AS SessionAggDate,
       CAST(DATEDIFF(MINUTE, sp.SessionStartTime, sp.SessionEndTime) AS float)
         * CAST(ISNULL(sp.Present, 0) AS float) / 60.0 AS SessionHoursRow
-    FROM dbo.Kipu_Sessions_Patients sp
-    INNER JOIN dbo.Kipu_PatientsList p ON sp.PatientID = p.PatientId
-    WHERE LTRIM(RTRIM(CAST(p.mr_number AS nvarchar(100)))) = LTRIM(RTRIM(@mrNumber))
-      AND CONVERT(date, DATEADD(HOUR, -8, sp.SessionEndTime)) = @cellDate
+    FROM dbo.Kipu_Sessions_Patients AS sp
+    INNER JOIN dbo.Kipu_PatientsList AS p
+      ON sp.PatientID = p.PatientId
       AND ISNULL(sp.IsDeleted, 0) <> 1
       AND sp.SessionEndTime IS NOT NULL
+    INNER JOIN dbo.Kipu_Sessions AS ks
+      ON sp.SessionId = ks.SessionId
+    WHERE LTRIM(RTRIM(CAST(p.mr_number AS nvarchar(100)))) = LTRIM(RTRIM(@mrNumber))
+      AND CONVERT(date, DATEADD(HOUR, -8, sp.SessionEndTime)) = @cellDate
     ORDER BY sp.SessionEndTime DESC, sp.SessionStartTime DESC
   `;
 

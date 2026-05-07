@@ -50,7 +50,16 @@ function buildRowGroupKey(record) {
   return [mr, authStart, authEnd, loc, authorizationNumber].join("|");
 }
 
-async function getMonthlyReport({ year, month, fromYear, fromMonth, toYear, toMonth, name, mrNumber }) {
+async function getMonthlyReport({
+  year,
+  month,
+  fromYear,
+  fromMonth,
+  toYear,
+  toMonth,
+  name,
+  mrNumber
+}) {
   const hasRange = fromYear && fromMonth && toYear && toMonth;
   const { start, end, days } = hasRange
     ? getMonthSpanRange(fromYear, fromMonth, toYear, toMonth)
@@ -63,17 +72,14 @@ async function getMonthlyReport({ year, month, fromYear, fromMonth, toYear, toMo
   });
 
   const rowMap = new Map();
-
   for (const record of records) {
     const rowKey = buildRowGroupKey(record);
     if (!rowMap.has(rowKey)) {
       rowMap.set(rowKey, createPatientRow(record, rowKey));
     }
-
     const row = rowMap.get(rowKey);
     const dayKey = normalizeDate(record.DayDate);
     if (!dayKey) continue;
-
     row.dailyEntries[dayKey] = buildDayEntry(row.dailyEntries[dayKey], record);
   }
 
@@ -85,7 +91,9 @@ async function getMonthlyReport({ year, month, fromYear, fromMonth, toYear, toMo
     toYear: hasRange ? toYear : year,
     toMonth: hasRange ? toMonth : month,
     days,
-    rows: Array.from(rowMap.values())
+    rows: Array.from(rowMap.values()).sort((a, b) =>
+      String(a.mrNumber || "").localeCompare(String(b.mrNumber || ""), undefined, { numeric: true })
+    )
   };
 }
 

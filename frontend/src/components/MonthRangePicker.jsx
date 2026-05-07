@@ -52,7 +52,7 @@ function ChevronIcon({ open }) {
 
 export default function MonthRangePicker({ value, onApply, onClear, years, disabled }) {
   const [open, setOpen] = useState(false);
-  const [leftYear, setLeftYear] = useState(value.fromYear);
+  const [leftYear, setLeftYear] = useState(dayjs().year() - 1);
   const [draft, setDraft] = useState(value);
   const [anchorKey, setAnchorKey] = useState(null);
   const rootRef = useRef(null);
@@ -61,7 +61,7 @@ export default function MonthRangePicker({ value, onApply, onClear, years, disab
     if (!open) return;
     setDraft(value);
     setAnchorKey(null);
-    setLeftYear(Math.min(value.fromYear, value.toYear));
+    setLeftYear(dayjs().year() - 1);
   }, [open, value]);
 
   useEffect(() => {
@@ -84,7 +84,6 @@ export default function MonthRangePicker({ value, onApply, onClear, years, disab
 
   const yearList = years.length ? years : [dayjs().year()];
   const minY = Math.min(...yearList);
-  const maxY = Math.max(...yearList);
 
   const handleMonthClick = (year, month) => {
     const k = monthKey(year, month);
@@ -126,11 +125,7 @@ export default function MonthRangePicker({ value, onApply, onClear, years, disab
   };
 
   const shiftYears = (delta) => {
-    setLeftYear((y) => {
-      const next = y + delta;
-      const maxLeft = maxY > minY ? maxY - 1 : minY;
-      return Math.min(maxLeft, Math.max(minY, next));
-    });
+    setLeftYear((y) => y + delta);
   };
 
   const renderYearGrid = (year) => (
@@ -139,17 +134,14 @@ export default function MonthRangePicker({ value, onApply, onClear, years, disab
       <div className="grid w-full grid-cols-3 gap-2">
         {MONTH_SHORT.map((label, idx) => {
           const m = idx + 1;
-          const inList = year >= minY && year <= maxY;
-          const selected =
-            inList &&
-            isInRange(year, m, draft.fromYear, draft.fromMonth, draft.toYear, draft.toMonth);
-          const dimmed = !inList;
+          const selected = isInRange(year, m, draft.fromYear, draft.fromMonth, draft.toYear, draft.toMonth);
+          const dimmed = false;
           return (
             <button
               key={`${year}-${m}`}
               type="button"
               disabled={disabled || dimmed}
-              onClick={() => inList && handleMonthClick(year, m)}
+              onClick={() => handleMonthClick(year, m)}
               className={[
                 "rounded-lg p-2 font-medium leading-tight shadow-sm transition-all duration-200 hover:shadow-md",
                 dimmed && "cursor-not-allowed opacity-30",
@@ -212,12 +204,12 @@ export default function MonthRangePicker({ value, onApply, onClear, years, disab
 
       {open && (
         <div className="absolute left-0 top-full z-[200] mt-1.5 w-[min(28rem,calc(100vw-1.5rem))] max-w-[calc(100vw-1.5rem)] rounded-xl border border-emerald-200 bg-white/95 p-3 shadow-2xl backdrop-blur-md">
-          <div className="mb-2 flex flex-wrap justify-end gap-1.5 border-b border-emerald-100 pb-2">
+          <div className="mb-2 flex flex-nowrap items-center justify-between gap-1 border-b border-emerald-100 pb-2">
             {[3, 6, 9, 12].map((n) => (
               <button
                 key={n}
                 type="button"
-                className="rounded-md bg-gradient-to-r from-emerald-100 to-green-100 px-2 py-1 font-medium text-emerald-900 shadow-sm transition-all duration-200 hover:from-emerald-200 hover:to-green-200 hover:shadow-md"
+                className="whitespace-nowrap rounded-md bg-gradient-to-r from-emerald-100 to-green-100 px-1.5 py-0.5 text-[11px] font-medium text-emerald-900 shadow-sm transition-all duration-200 hover:from-emerald-200 hover:to-green-200 hover:shadow-md"
                 onClick={() => handleQuick(n)}
               >
                 Past {n} Months
@@ -228,25 +220,29 @@ export default function MonthRangePicker({ value, onApply, onClear, years, disab
           <div className="flex items-start gap-2">
             <button
               type="button"
-              className="mt-7 shrink-0 rounded-lg p-1 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-800"
+              className="mt-0 shrink-0 rounded-lg p-0 text-[2.5em] leading-none text-emerald-600 hover:bg-emerald-100 hover:text-emerald-800"
               onClick={() => shiftYears(-1)}
               aria-label="Previous years"
             >
-              <span className="text-[1.6em] leading-none">‹</span>
+              <span className="leading-none">‹</span>
             </button>
 
-            <div className="grid min-w-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-3">
+            <div className="relative grid min-w-0 flex-1 grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-3">
               {renderYearGrid(leftYear)}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute left-1/2 top-[1.86rem] hidden h-[9.9rem] w-px -translate-x-1/2 bg-emerald-200 sm:block"
+              />
               {renderYearGrid(leftYear + 1)}
             </div>
 
             <button
               type="button"
-              className="mt-7 shrink-0 rounded-lg p-1 text-emerald-600 hover:bg-emerald-100 hover:text-emerald-800"
+              className="mt-0 shrink-0 rounded-lg p-0 text-[2.5em] leading-none text-emerald-600 hover:bg-emerald-100 hover:text-emerald-800"
               onClick={() => shiftYears(1)}
               aria-label="Next years"
             >
-              <span className="text-[1.6em] leading-none">›</span>
+              <span className="leading-none">›</span>
             </button>
           </div>
 

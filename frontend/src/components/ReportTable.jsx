@@ -1,16 +1,16 @@
-import { useMemo, useRef, useCallback } from "react";
+import { memo, useMemo, useRef, useCallback } from "react";
 import dayjs from "dayjs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { getCellStyle } from "../utils/reportCell";
 import { buildCellStateKey, cellHasNotes, getCellStateEntry } from "../utils/cellStateStorage";
 
 const FIXED_COLUMNS = [
-  { key: "mrNumber", label: "MR Number", width: 130 },
-  { key: "name", label: "Name", width: 190 },
-  { key: "admit", label: "Admit", width: 110 },
-  { key: "discharge", label: "Discharge", width: 110 },
-  { key: "auth", label: "Auth Range", width: 160 },
-  { key: "locSummary", label: "LOC Summary", width: 130 }
+  { key: "mrNumber", label: "MR Number", width: 100 },
+  { key: "name", label: "Name", width: 145 },
+  { key: "admit", label: "Admit", width: 88 },
+  { key: "discharge", label: "Discharge", width: 88 },
+  { key: "auth", label: "Auth Range", width: 128 },
+  { key: "locSummary", label: "LOC Summary", width: 100 }
 ];
 
 const LEFT_OFFSETS = FIXED_COLUMNS.reduce((acc, col, index) => {
@@ -59,7 +59,8 @@ function buildRowSpanMeta(rows) {
 
 function formatHours(value) {
   const numberValue = Number(value ?? 0);
-  return Number.isFinite(numberValue) ? numberValue.toFixed(2).replace(/\.?0+$/, "") : "0";
+  if (!Number.isFinite(numberValue) || numberValue === 0) return "-";
+  return numberValue.toFixed(2).replace(/\.?0+$/, "");
 }
 
 function activeNotesForPreview(ann) {
@@ -67,12 +68,31 @@ function activeNotesForPreview(ann) {
   return ann.notes.filter((n) => n && !n.deleted && String(n.body || "").trim());
 }
 
-export default function ReportTable({ report, virtualized = true, onDayCellClick, cellAnnotations = {} }) {
+function isOutOfAdmitRange(dayKey, admit, discharge) {
+  const cellDate = dayjs(dayKey);
+  const admitD = admit ? dayjs(admit) : null;
+  const dischargeD = discharge ? dayjs(discharge) : null;
+  return (
+    (admitD && cellDate.isBefore(admitD, "day")) ||
+    (dischargeD && cellDate.isAfter(dischargeD, "day"))
+  );
+}
+
+function ReportTable({
+  report,
+  virtualized = true,
+  onDayCellPointerDown,
+  onDayCellClick,
+  cellAnnotations = {}
+}) {
   const scrollRef = useRef(null);
   const interactiveDayCells = typeof onDayCellClick === "function";
   const handleDayCellActivate = useCallback(
     (row, dayKey) => {
       if (!interactiveDayCells) return;
+      if (typeof onDayCellPointerDown === "function") {
+        onDayCellPointerDown();
+      }
       const entry = row.dailyEntries?.[dayKey];
       const dayHours = Number(entry?.hours ?? 0);
       onDayCellClick({
@@ -88,7 +108,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
         dayHours
       });
     },
-    [interactiveDayCells, onDayCellClick]
+    [interactiveDayCells, onDayCellClick, onDayCellPointerDown]
   );
   const dayHeaders = useMemo(
     () => report.days.map((day) => ({ key: day, label: dayjs(day).format("M/D") })),
@@ -97,7 +117,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
   const rowVirtualizer = useVirtualizer({
     count: report.rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 42,
+    estimateSize: () => 32,
     overscan: 12,
     enabled: virtualized
   });
@@ -105,16 +125,16 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
   const totalHeight = rowVirtualizer.getTotalSize();
   const fixedTotalWidth = FIXED_COLUMNS.reduce((sum, col) => sum + col.width, 0);
   /** Same pixel width for header + body day columns (flex + table-fixed). */
-  const dayColumnWidth = 72;
+  const dayColumnWidth = 52;
   const gridMinWidth = fixedTotalWidth + dayHeaders.length * dayColumnWidth;
 
   const dayHeaderCellClass =
-    "shrink-0 border border-slate-200 bg-slate-100 px-2 py-2 text-center text-sm font-semibold text-slate-700 box-border";
-  const dayBodyCellClass = `shrink-0 box-border border border-slate-200 px-2 py-2 text-center text-sm font-medium align-middle${
+    "shrink-0 border border-slate-200 bg-slate-100 px-1 py-1 text-center text-[11px] font-semibold text-slate-700 box-border";
+  const dayBodyCellClass = `shrink-0 box-border border border-slate-200 px-1 py-0.5 text-center text-[11px] font-medium align-middle${
     interactiveDayCells ? " cursor-pointer select-none hover:brightness-[0.97]" : ""
   }`;
   const dayBodyInnerClass =
-    "relative flex min-h-[2.75rem] w-full flex-col items-center justify-center text-center";
+    "relative flex min-h-[1.9rem] w-full flex-col items-center justify-center text-center";
   const dayColStyleFlex = {
     width: dayColumnWidth,
     minWidth: dayColumnWidth,
@@ -130,8 +150,8 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
   };
 
   const headerClass =
-    "border border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold text-slate-700";
-  const cellClass = "border border-slate-200 px-3 py-2 text-slate-700";
+    "border border-slate-200 bg-slate-100 px-1.5 py-1 text-left text-[11px] font-semibold text-slate-700";
+  const cellClass = "border border-slate-200 px-1.5 py-1 text-[11px] text-slate-700";
 
   const rowSpanMeta = useMemo(() => buildRowSpanMeta(report.rows), [report.rows]);
   const hasMergedGroups = useMemo(
@@ -149,6 +169,8 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
       hours,
       admit: row.admit,
       discharge: row.discharge,
+      authStart: row.authStart,
+      authEnd: row.authEnd,
       loc
     });
     const cellKey = buildCellStateKey({
@@ -172,7 +194,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
         }}
         role={interactiveDayCells ? "button" : undefined}
         tabIndex={interactiveDayCells ? 0 : undefined}
-        onClick={interactiveDayCells ? () => handleDayCellActivate(row, dayKey) : undefined}
+        onMouseDown={interactiveDayCells ? () => handleDayCellActivate(row, dayKey) : undefined}
         onKeyDown={
           interactiveDayCells
             ? (e) => {
@@ -190,7 +212,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
           `Auth: ${row.authStart || "-"} – ${row.authEnd || "-"}`,
           `Auth #: ${row.authorizationNumber || "-"}`,
           `LOC: ${row.locSummary || loc || "-"}`,
-          `Hours: ${formatHours(hours)}`,
+          `Hours: ${isOutOfAdmitRange(dayKey, row.admit, row.discharge) ? "-" : formatHours(hours)}`,
           `Admit: ${row.admit || "-"}`,
           `Discharge: ${row.discharge || "-"}`,
           ann && cellHasNotes(ann)
@@ -206,7 +228,9 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
           .join("\n")}
       >
         <div className={dayBodyInnerClass}>
-          <span className="tabular-nums">{formatHours(hours)}</span>
+          <span className="tabular-nums">
+            {isOutOfAdmitRange(dayKey, row.admit, row.discharge) ? "" : formatHours(hours)}
+          </span>
           {ann?.completed ? (
             <span
               className="pointer-events-none absolute bottom-0.5 right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
@@ -237,6 +261,8 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
       hours,
       admit: row.admit,
       discharge: row.discharge,
+      authStart: row.authStart,
+      authEnd: row.authEnd,
       loc
     });
     const cellKey = buildCellStateKey({
@@ -257,7 +283,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
         style={{ ...style, ...dayColStyleTable }}
         role={interactiveDayCells ? "button" : undefined}
         tabIndex={interactiveDayCells ? 0 : undefined}
-        onClick={interactiveDayCells ? () => handleDayCellActivate(row, dayKey) : undefined}
+        onMouseDown={interactiveDayCells ? () => handleDayCellActivate(row, dayKey) : undefined}
         onKeyDown={
           interactiveDayCells
             ? (e) => {
@@ -275,7 +301,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
           `Auth: ${row.authStart || "-"} – ${row.authEnd || "-"}`,
           `Auth #: ${row.authorizationNumber || "-"}`,
           `LOC: ${row.locSummary || loc || "-"}`,
-          `Hours: ${formatHours(hours)}`,
+          `Hours: ${isOutOfAdmitRange(dayKey, row.admit, row.discharge) ? "-" : formatHours(hours)}`,
           `Admit: ${row.admit || "-"}`,
           `Discharge: ${row.discharge || "-"}`,
           ann && cellHasNotes(ann)
@@ -291,7 +317,9 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
           .join("\n")}
       >
         <div className={dayBodyInnerClass}>
-          <span className="tabular-nums">{formatHours(hours)}</span>
+          <span className="tabular-nums">
+            {isOutOfAdmitRange(dayKey, row.admit, row.discharge) ? "" : formatHours(hours)}
+          </span>
           {ann?.completed ? (
             <span
               className="pointer-events-none absolute bottom-0.5 right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
@@ -333,9 +361,9 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
   return (
     <div
       ref={scrollRef}
-      className="h-[70vh] overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm"
+      className="h-[76vh] overflow-auto rounded-md border border-slate-200 bg-white shadow-sm"
     >
-      <div className="relative text-sm" style={{ minWidth: `${gridMinWidth}px` }}>
+      <div className="relative text-[11px]" style={{ minWidth: `${gridMinWidth}px` }}>
         {effectiveVirtualized && (
           <div className="sticky top-0 z-40 bg-slate-100">
             <div className="flex w-max min-w-full">
@@ -385,7 +413,7 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
           </div>
         ) : (
           <table
-            className="w-max border-collapse text-sm"
+            className="w-max border-collapse text-xs"
             style={{ tableLayout: "fixed", width: `${gridMinWidth}px`, minWidth: `${gridMinWidth}px` }}
           >
             <colgroup>
@@ -511,3 +539,5 @@ export default function ReportTable({ report, virtualized = true, onDayCellClick
     </div>
   );
 }
+
+export default memo(ReportTable);

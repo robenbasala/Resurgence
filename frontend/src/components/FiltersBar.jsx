@@ -3,7 +3,7 @@ import MonthRangePicker from "./MonthRangePicker";
 function FilterFieldBox({ children, className = "" }) {
   return (
     <div
-      className={`flex h-9 min-w-0 items-center gap-2 rounded-lg border border-slate-300 bg-white px-2.5 shadow-none ${className}`.trim()}
+      className={`flex h-9 min-w-0 items-center gap-2 rounded-md border border-slate-300 bg-white px-2.5 shadow-none ${className}`.trim()}
     >
       {children}
     </div>
@@ -24,7 +24,7 @@ function FieldClearX({ onClick, disabled, label }) {
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="shrink-0 px-0.5 text-lg font-light leading-none text-red-500 hover:text-red-600 disabled:opacity-40"
+      className="shrink-0 px-0.5 text-base font-medium leading-none text-red-500 hover:text-red-600 disabled:opacity-40"
       title={label}
       aria-label={label}
     >
@@ -48,9 +48,18 @@ export default function FiltersBar({
   onToggleViewMode,
   loading
 }) {
+  const facilityOptions = [
+    "",
+    "RCA Mental Health",
+    "Riverside",
+    "RCA Outpatient",
+    "Milton",
+    "MUSE Outpatient"
+  ];
+
   return (
-    <div className="overflow-visible rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-      <div className="grid grid-cols-1 gap-2 overflow-visible md:grid-cols-2 md:gap-x-2 md:gap-y-2 lg:inline-grid lg:w-max lg:max-w-full lg:grid-cols-[minmax(20rem,26rem)_minmax(10rem,12.5rem)_minmax(10rem,12.5rem)_auto_auto_auto] lg:items-stretch lg:justify-items-stretch">
+    <div className="overflow-visible rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+      <div className="grid grid-cols-1 gap-2 overflow-visible md:grid-cols-2 md:gap-x-2 md:gap-y-2 lg:inline-grid lg:w-full lg:max-w-full lg:grid-cols-[minmax(17rem,22rem)_minmax(10rem,12rem)_minmax(10rem,12rem)_minmax(10rem,12rem)_auto_auto_auto] lg:items-stretch lg:justify-items-stretch">
         <div className="relative z-[200] min-w-0 md:col-span-2 lg:col-span-1">
           <FilterFieldBox className="w-full min-w-0">
             <div className="min-w-0 flex-1">
@@ -74,7 +83,7 @@ export default function FiltersBar({
           <input
             className={inputInnerClass}
             placeholder="Search Name"
-            title="Filters the loaded table as you type. Generate Report runs a new database query."
+            title="Live filter"
             value={filters.name}
             onChange={(e) => onChange("name", e.target.value)}
             disabled={loading}
@@ -86,10 +95,30 @@ export default function FiltersBar({
         </FilterFieldBox>
 
         <FilterFieldBox className="min-w-0">
+          <select
+            className={inputInnerClass}
+            title="Live facility filter"
+            value={filters.facility}
+            onChange={(e) => onChange("facility", e.target.value)}
+            disabled={loading}
+          >
+            <option value="">All Facilities</option>
+            {facilityOptions
+              .filter(Boolean)
+              .map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+          </select>
+          <ChevronDown />
+        </FilterFieldBox>
+
+        <FilterFieldBox className="min-w-0">
           <input
             className={inputInnerClass}
             placeholder="Search MR Number"
-            title="Filters the loaded table as you type. Generate Report runs a new database query."
+            title="Live filter"
             value={filters.mrNumber}
             onChange={(e) => onChange("mrNumber", e.target.value)}
             disabled={loading}
@@ -102,7 +131,7 @@ export default function FiltersBar({
 
         <button
           type="button"
-          className="flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-lg bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           onClick={onGenerate}
           disabled={loading}
         >
@@ -111,7 +140,7 @@ export default function FiltersBar({
 
         <button
           type="button"
-          className="flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-emerald-600 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+          className="flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-emerald-600 bg-white px-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
           onClick={onExport}
           disabled={loading}
         >
@@ -120,7 +149,7 @@ export default function FiltersBar({
 
         <button
           type="button"
-          className="flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="flex h-9 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           onClick={onToggleViewMode}
           disabled={loading}
           title="Switch between standard and virtualized row rendering"

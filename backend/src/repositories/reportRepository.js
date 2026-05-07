@@ -22,6 +22,8 @@ async function fetchReportRecords({ startDate, endDate, name, mrNumber }) {
   request.input("mrNumber", sql.NVarChar(100), mrNumber || null);
 
   const query = `
+    DECLARE @endExclusive date = DATEADD(day, 1, @endDate);
+
     SELECT
       UniqueKey,
       [MR Number] AS mrNumber,
@@ -36,16 +38,10 @@ async function fetchReportRecords({ startDate, endDate, name, mrNumber }) {
       DayDate,
       TotalHours
     FROM ${sessionHoursView}
-    WHERE CAST(DayDate AS date) BETWEEN @startDate AND @endDate
+    WHERE DayDate >= @startDate
+      AND DayDate < @endExclusive
       AND (@name IS NULL OR Name LIKE '%' + @name + '%')
-      AND (@mrNumber IS NULL OR CAST([MR Number] AS nvarchar(100)) LIKE '%' + @mrNumber + '%')
-    ORDER BY
-      CAST([MR Number] AS nvarchar(100)),
-      CAST(AuthStart AS date),
-      CAST(AuthEnd AS date),
-      COALESCE(CAST(LOC AS nvarchar(200)), ''),
-      Name,
-      CAST(DayDate AS date)
+      AND (@mrNumber IS NULL OR CONVERT(nvarchar(100), [MR Number]) LIKE '%' + @mrNumber + '%');
   `;
 
   const result = await request.query(query);

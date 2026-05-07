@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
 import { fetchCellDetails } from "../api/reportApi";
 import { CELL_NOTE_BODY_MAX, createNoteFromBody, sortNotesForDisplay } from "../utils/cellStateStorage";
@@ -14,6 +14,60 @@ function truncate(text, max = 240) {
   const s = String(text);
   if (s.length <= max) return s;
   return `${s.slice(0, max)}…`;
+}
+
+function toMillis(value) {
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const d = dayjs(value);
+  return d.isValid() ? d.valueOf() : Number.MAX_SAFE_INTEGER;
+}
+
+function normalizeStatus(value) {
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function isPendingStatus(value) {
+  const s = normalizeStatus(value).toLowerCase();
+  return s.includes("pending") || s.includes("scheduled") || s.includes("incomplete");
+}
+
+function getSessionStatus(s) {
+  const statusRaw = s.Status ?? s.status;
+  if (statusRaw != null && String(statusRaw).trim() !== "") return String(statusRaw);
+  if (isSessionPresentFalse(s)) return "Not Present";
+  const p = s.Present ?? s.present;
+  if (p === 1 || p === true || String(p) === "1") return "Completed";
+  if (p === 0 || p === false || String(p) === "0") return "Pending";
+  return "—";
+}
+
+function getSessionName(s) {
+  return s.GroupSessionTitle ?? s.groupSessionTitle ?? s.Name ?? s.SessionName ?? s.sessionName ?? "Session";
+}
+
+function getSessionProvider(s) {
+  return s.Provider ?? s.ProviderName ?? s.providerName ?? s.StaffName ?? "—";
+}
+
+function getSessionTimeRange(s) {
+  return `${formatDt(s.SessionStartTime ?? s.sessionStartTime)} → ${formatDt(s.SessionEndTime ?? s.sessionEndTime)}`;
+}
+
+function getEvaluationName(ev) {
+  return ev.Name ?? ev.name ?? ev.EvaluationName ?? ev.evaluationName ?? "Evaluation";
+}
+
+function getEvaluationProvider(ev) {
+  return ev.Provider ?? ev.ProviderName ?? ev.providerName ?? ev.Clinician ?? "—";
+}
+
+function getEvaluationStatus(ev) {
+  return ev.status ?? ev.Status ?? "—";
+}
+
+function getEvaluationTimeRange(ev) {
+  return `${formatDt(ev.start_time ?? ev.StartTime)} → ${formatDt(ev.end_time ?? ev.EndTime)}`;
 }
 
 /** Hours as number, or null if unknown (evaluations from view / list). */
@@ -48,6 +102,20 @@ function isSessionPresentFalse(s) {
   }
   const n = Number(p);
   return Number.isFinite(n) && n === 0;
+}
+
+function isSessionPresentTrue(s) {
+  if (!s) return false;
+  const p = s.Present ?? s.present;
+  if (p === true) return true;
+  if (p === false || p == null) return false;
+  if (typeof p === "string") {
+    const low = p.trim().toLowerCase();
+    if (low === "true" || low === "1") return true;
+    if (low === "false" || low === "0") return false;
+  }
+  const n = Number(p);
+  return Number.isFinite(n) && n === 1;
 }
 
 /** Present-weighted hours when available, else from start/end × Present. */
@@ -148,7 +216,8 @@ export default function CellDetailPanel({
   cellStateKey,
   cellNotes = [],
   cellCompleted = false,
-  onCellStateChange
+  onCellStateChange,
+  forceLoading = false
 }) {
   const [activeTab, setActiveTab] = useState("details");
   const [pendingDeleteNoteId, setPendingDeleteNoteId] = useState(null);
@@ -186,12 +255,51 @@ export default function CellDetailPanel({
     () => sessions.reduce((sum, s) => sum + (getSessionDurationHours(s) ?? 0), 0),
     [sessions]
   );
+  const sortedSessions = useMemo(
+    () =>
+      [...sessions].sort((a, b) =>
+        toMillis(a.SessionStartTime ?? a.sessionStartTime) - toMillis(b.SessionStartTime ?? b.sessionStartTime)
+      ),
+    [sessions]
+  );
+  const sortedEvaluations = useMemo(
+    () => [...evaluations].sort((a, b) => toMillis(a.start_time ?? a.StartTime) - toMillis(b.start_time ?? b.StartTime)),
+    [evaluations]
+  );
+  const pendingItems = useMemo(() => {
+    const sessionPending = sortedSessions
+      .filter((s) => isPendingStatus(getSessionStatus(s)))
+      .map((s) => ({
+        type: "Session",
+        name: getSessionName(s),
+        time: getSessionTimeRange(s),
+        provider: getSessionProvider(s),
+        status: getSessionStatus(s)
+      }));
+    const evalPending = sortedEvaluations
+      .filter((ev) => isPendingStatus(getEvaluationStatus(ev)))
+      .map((ev) => ({
+        type: "Evaluation",
+        name: getEvaluationName(ev),
+        time: getEvaluationTimeRange(ev),
+        provider: getEvaluationProvider(ev),
+        status: getEvaluationStatus(ev)
+      }));
+    return [...sessionPending, ...evalPending];
+  }, [sortedSessions, sortedEvaluations]);
 
   const pendingDeleteBody = useMemo(() => {
     if (!pendingDeleteNoteId) return "";
     const n = cellNotes.find((x) => x && x.id === pendingDeleteNoteId);
     return n?.body ? String(n.body).replace(/\s+/g, " ").trim() : "";
   }, [pendingDeleteNoteId, cellNotes]);
+
+  useLayoutEffect(() => {
+    if (selection?.mrNumber && selection?.date) {
+      setLoading(true);
+      setError("");
+    }
+  }, [selection?.mrNumber, selection?.date]);
 
   useEffect(() => {
     if (!selection?.mrNumber || !selection?.date) {
@@ -292,12 +400,12 @@ export default function CellDetailPanel({
 
   return (
     <>
-      <aside className="flex max-h-[85vh] w-full shrink-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm lg:w-[420px] lg:max-w-[40vw]">
-      <div className="flex shrink-0 flex-col gap-2 border-b border-slate-200 px-4 py-3">
+      <aside className="relative flex max-h-[85vh] w-full shrink-0 flex-col rounded-md border border-slate-200 bg-white shadow-sm lg:w-[320px] lg:max-w-[30vw]">
+      <div className="flex shrink-0 flex-col gap-1 border-b border-slate-200 px-2.5 py-2">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-slate-800">Selected cell</h2>
-            <p className="mt-0.5 truncate text-xs text-slate-500">
+            <h2 className="text-[11px] font-semibold text-slate-800">Selected cell</h2>
+            <p className="mt-0.5 truncate text-[10px] text-slate-500">
               MR <span className="font-medium text-slate-700">{selection.mrNumber || "—"}</span>
               {selection.name ? (
                 <>
@@ -306,19 +414,10 @@ export default function CellDetailPanel({
                 </>
               ) : null}
             </p>
-            <p className="text-xs font-medium text-slate-700">{titleDate}</p>
-            <p className="mt-1 text-[11px] leading-snug text-slate-600">
-              <span className="font-medium text-slate-700">Auth range:</span>{" "}
-              {selection.authStart || "—"} → {selection.authEnd || "—"}
-              {selection.authorizationNumber ? (
-                <>
-                  {" "}
-                  · <span className="font-medium text-slate-700">Auth #</span> {selection.authorizationNumber}
-                </>
-              ) : null}
+            <p className="text-[10px] font-medium text-slate-700">{titleDate}</p>
+            <p className="mt-0.5 text-[10px] leading-snug text-slate-600">
               {selection.locSummary ? (
                 <>
-                  {" "}
                   · <span className="font-medium text-slate-700">LOC</span> {selection.locSummary}
                 </>
               ) : null}
@@ -329,7 +428,7 @@ export default function CellDetailPanel({
               <button
                 type="button"
                 onClick={onCollapse}
-                className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-100"
+                className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700 shadow-sm hover:bg-slate-100"
               >
                 Collapse
               </button>
@@ -515,18 +614,13 @@ export default function CellDetailPanel({
             id="cell-tabpanel-details"
             role="tabpanel"
             aria-labelledby="cell-tab-details"
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2.5"
           >
-            {loading && (
-              <p className="text-sm text-slate-500" role="status">
-                Loading…
-              </p>
-            )}
-            {!loading && error && (
+            {!(forceLoading || loading) && error && (
               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
             )}
 
-            {!loading && !error && (
+            {!(forceLoading || loading) && !error && (
               <>
                 {isZeroHourCell ? (
                   <p className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm leading-relaxed text-slate-700">
@@ -538,154 +632,125 @@ export default function CellDetailPanel({
                 {!isZeroHourCell ? (
                   <div className="mb-6 space-y-4">
                     <CollapsibleSection
-                      tint="violet"
-                      title={`Evaluations (${evaluations.length})`}
-                      summaryExtra={
-                        evaluations.length > 0 ? (
-                          <span className="font-semibold normal-case text-violet-950">
-                            · Total {formatDurationHuman(evaluationsTotalHours)}
-                          </span>
-                        ) : null
-                      }
-                    >
-                      {evaluations.length === 0 ? (
-                        <p className="text-sm text-violet-900/70">No evaluations for this MR and date.</p>
-                      ) : (
-                        <ul className="space-y-3">
-                          {evaluations.map((ev, evIdx) => {
-                        const evalDate = ev.EvaluationDate ?? ev.evaluationDate ?? ev.EvaluationDateOnly;
-                        const dur = ev.Duration ?? ev.duration;
-                        const hours = getEvaluationDurationHours(ev);
-                        const title = ev.name || ev.Name || "Evaluation";
-                        const hasListRow =
-                          ev.start_time != null ||
-                          ev.end_time != null ||
-                          ev.status != null ||
-                          ev.billable != null;
-                        return (
-                          <li
-                            key={`${ev.PatientId ?? ev.patientId ?? "p"}-${String(evalDate)}-${String(dur)}-${evIdx}`}
-                            className="overflow-hidden rounded-xl border border-violet-200 bg-white text-sm text-violet-950 shadow-sm"
-                          >
-                            <div className="bg-gradient-to-b from-violet-100 to-violet-50/90 px-3 py-3 text-center">
-                              <p className="text-lg font-bold tabular-nums leading-tight text-violet-950">
-                                {formatDurationHuman(hours)}
-                              </p>
-                              <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700/90">
-                                Duration
-                              </p>
-                            </div>
-                            <div className="space-y-1.5 border-t border-violet-100 px-3 py-2.5">
-                              <div className="font-medium text-violet-950">{title}</div>
-                              {evalDate != null ? (
-                                <div className="text-xs text-violet-800/85">Day: {formatDt(evalDate)}</div>
-                              ) : null}
-                              {ev.PatientId != null || ev.patientId != null ? (
-                                <div className="text-xs text-violet-800/80">
-                                  Patient ID: {String(ev.PatientId ?? ev.patientId)}
-                                  {ev.patient_casefile_id != null ? (
-                                    <> · Case: {String(ev.patient_casefile_id)}</>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                              {hasListRow ? (
-                                <>
-                                  <div className="text-xs text-violet-900/80">
-                                    Status: {ev.status ?? "—"} · Billable: {ev.billable ?? "—"}
-                                  </div>
-                                  <div className="text-xs text-violet-800/75">
-                                    {formatDt(ev.start_time)} → {formatDt(ev.end_time)}
-                                  </div>
-                                  {(ev.patient_casefile_id || ev.ExtractedPatientId) && (
-                                    <div className="break-all text-xs text-violet-800/75">
-                                      {ev.patient_casefile_id ? (
-                                        <span>Case: {String(ev.patient_casefile_id)}</span>
-                                      ) : null}
-                                      {ev.ExtractedPatientId != null && ev.ExtractedPatientId !== "" ? (
-                                        <span className={ev.patient_casefile_id ? " ml-2" : ""}>
-                                          Extracted ID: {String(ev.ExtractedPatientId)}
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                  )}
-                                </>
-                              ) : null}
-                              {ev.evaluation_content != null && String(ev.evaluation_content).length > 0 ? (
-                                <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-xs text-violet-900/80">
-                                  {truncate(ev.evaluation_content, 2000)}
-                                </pre>
-                              ) : null}
-                            </div>
-                          </li>
-                        );
-                      })}
-                        </ul>
-                      )}
-                    </CollapsibleSection>
-
-                    <CollapsibleSection
                       className="mb-0"
                       tint="teal"
-                      title={`Sessions (${sessions.length})`}
+                      title={`Sessions (${sortedSessions.length})`}
                       summaryExtra={
-                        sessions.length > 0 ? (
+                        sortedSessions.length > 0 ? (
                           <span className="font-semibold normal-case text-teal-950">
                             · Total {formatDurationHuman(sessionsTotalHours)}
                           </span>
                         ) : null
                       }
                     >
-                      {sessions.length === 0 ? (
+                      {sortedSessions.length === 0 ? (
                         <p className="text-sm text-teal-900/70">No sessions for this MR and date.</p>
                       ) : (
                         <ul className="space-y-3">
-                          {sessions.map((s, idx) => {
-                        const sh = getSessionDurationHours(s);
-                        return (
-                          <li
-                            key={`${s.SessionId}-${s.PatientID}-${s.SessionStartTime ?? "ns"}-${idx}`}
-                            className="relative overflow-hidden rounded-xl border border-teal-200 bg-white text-sm text-teal-950 shadow-sm"
-                          >
-                            {isSessionPresentFalse(s) ? (
-                              <span
-                                className="pointer-events-none absolute right-2 top-2 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-[15px] font-bold leading-none text-white shadow-md ring-2 ring-white"
-                                title="Present: false"
-                                aria-label="Present false"
+                          {sortedSessions.map((s, idx) => {
+                            const sessionHours = getSessionDurationHours(s);
+                            const presentTrue = isSessionPresentTrue(s);
+                            const presentFalse = isSessionPresentFalse(s);
+                            return (
+                              <li
+                                key={`${s.SessionId}-${s.PatientID}-${s.SessionStartTime ?? "ns"}-${idx}`}
+                                className="relative overflow-hidden rounded-xl border border-teal-200 bg-white text-sm text-teal-950 shadow-sm"
                               >
-                                ×
-                              </span>
-                            ) : null}
-                            <div className="bg-gradient-to-b from-teal-100 to-teal-50/90 px-3 py-3 text-center">
-                              <p className="text-lg font-bold tabular-nums leading-tight text-teal-950">
-                                {formatDurationHuman(sh)}
-                              </p>
-                              <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700/90">
-                                Present-weighted time
-                              </p>
-                            </div>
-                            <div className="space-y-1.5 border-t border-teal-100 px-3 py-2.5">
-                              <div className="text-xs text-teal-900/80">
-                                Session #{s.SessionId ?? "—"} · Patient ID {s.PatientID ?? "—"}
-                              </div>
-                              <div className="text-xs text-teal-900/85">
-                                {formatDt(s.SessionStartTime)} → {formatDt(s.SessionEndTime)}
-                              </div>
-                              <div className="text-xs text-teal-900/80">Present: {String(s.Present ?? "—")}</div>
-                              {(s.SessionAggDate || s.sessionAggDate) && (
-                                <div className="text-[11px] text-teal-800/70">
-                                  Report date bucket (end −8h): {String(s.SessionAggDate ?? s.sessionAggDate)}
+                                {presentTrue ? (
+                                  <span
+                                    className="pointer-events-none absolute right-2 top-2 z-10 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[9px] font-bold leading-none text-emerald-600 shadow ring-1 ring-slate-200"
+                                    title="Present: true"
+                                    aria-label="Present true"
+                                  >
+                                    ✓
+                                  </span>
+                                ) : null}
+                                {presentFalse ? (
+                                  <span
+                                    className="pointer-events-none absolute right-2 top-2 z-10 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold leading-none text-white shadow ring-1 ring-white"
+                                    title="Present: false"
+                                    aria-label="Present false"
+                                  >
+                                    ×
+                                  </span>
+                                ) : null}
+                                <div className="border-b border-teal-100 bg-gradient-to-b from-teal-100 to-teal-50/90 px-3 py-2.5 text-center">
+                                  <div className="text-sm font-semibold leading-tight text-center text-teal-900">
+                                    {formatDurationHuman(sessionHours)}
+                                  </div>
                                 </div>
-                              )}
-                              {s.Note ? (
-                                <p className="text-xs text-teal-900/85">{truncate(s.Note, 500)}</p>
-                              ) : null}
-                            </div>
-                          </li>
-                        );
-                      })}
+                                <div className="px-3 py-2.5">
+                                  <div className="text-xs text-teal-900/85">Name: {getSessionName(s)}</div>
+                                  <div className="mt-1 text-xs text-teal-900/85">Time: {getSessionTimeRange(s)}</div>
+                                  <div className="text-xs text-teal-900/85">Provider: {getSessionProvider(s)}</div>
+                                  <div className="text-xs text-teal-900/85">Status: {getSessionStatus(s)}</div>
+                                </div>
+                              </li>
+                            );
+                          })}
                         </ul>
                       )}
                     </CollapsibleSection>
+
+                    <CollapsibleSection
+                      tint="violet"
+                      title={`Evaluations (${sortedEvaluations.length})`}
+                      summaryExtra={
+                        sortedEvaluations.length > 0 ? (
+                          <span className="font-semibold normal-case text-violet-950">
+                            · Total {formatDurationHuman(evaluationsTotalHours)}
+                          </span>
+                        ) : null
+                      }
+                    >
+                      {sortedEvaluations.length === 0 ? (
+                        <p className="text-sm text-violet-900/70">No evaluations for this MR and date.</p>
+                      ) : (
+                        <ul className="space-y-3">
+                          {sortedEvaluations.map((ev, idx) => {
+                            const evaluationHours = getEvaluationDurationHours(ev);
+                            return (
+                              <li
+                                key={`${ev.PatientId ?? ev.patientId ?? "p"}-${String(ev.start_time)}-${idx}`}
+                                className="overflow-hidden rounded-xl border border-violet-200 bg-white text-sm text-violet-950 shadow-sm"
+                              >
+                                <div className="border-b border-violet-100 bg-gradient-to-b from-violet-100 to-violet-50/90 px-3 py-2.5 text-center">
+                                  <div className="text-sm font-semibold leading-tight text-center text-violet-900">
+                                    {formatDurationHuman(evaluationHours)}
+                                  </div>
+                                </div>
+                                <div className="px-3 py-2.5">
+                                  <div className="text-xs text-violet-900/85">Evaluation: {getEvaluationName(ev)}</div>
+                                  <div className="mt-1 text-xs text-violet-900/85">Time: {getEvaluationTimeRange(ev)}</div>
+                                  <div className="text-xs text-violet-900/85">Provider: {getEvaluationProvider(ev)}</div>
+                                  <div className="text-xs text-violet-900/85">Status: {getEvaluationStatus(ev)}</div>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </CollapsibleSection>
+
+                    <section className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 ring-1 ring-amber-100/60">
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-amber-900">
+                        Pending items ({pendingItems.length})
+                      </h3>
+                      {pendingItems.length === 0 ? (
+                        <p className="mt-2 text-sm text-amber-900/70">No pending sessions or evaluations.</p>
+                      ) : (
+                        <ul className="mt-2 space-y-2">
+                          {pendingItems.map((item, idx) => (
+                            <li key={`${item.type}-${item.name}-${item.time}-${idx}`} className="rounded-md border border-amber-200 bg-white px-2.5 py-2">
+                              <div className="text-xs font-semibold text-amber-900">{item.type}: {item.name}</div>
+                              <div className="text-xs text-amber-900/85">Time: {item.time}</div>
+                              <div className="text-xs text-amber-900/85">Provider: {item.provider}</div>
+                              <div className="text-xs text-amber-900/85">Status: {item.status}</div>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
                   </div>
                 ) : null}
               </>
@@ -693,6 +758,22 @@ export default function CellDetailPanel({
           </div>
         )}
       </div>
+      {(forceLoading || loading) && (
+        <div
+          className="absolute inset-0 z-20 flex items-center justify-center rounded-md bg-slate-50/65 backdrop-blur-[2px]"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex flex-col items-center gap-2.5">
+            <div
+              className="h-9 w-9 animate-spin rounded-full border-2 border-slate-200 border-t-teal-500"
+              style={{ animationDuration: "0.75s" }}
+              aria-hidden
+            />
+            <p className="text-[11px] font-medium tracking-wide text-slate-600">Loading...</p>
+          </div>
+        </div>
+      )}
     </aside>
 
       {pendingDeleteNoteId ? (

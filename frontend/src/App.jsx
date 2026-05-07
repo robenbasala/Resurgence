@@ -15,8 +15,10 @@ const defaultFilters = {
   toYear: initialNow.year(),
   toMonth: initialNow.month() + 1,
   name: "",
-  mrNumber: ""
+  mrNumber: "",
+  facility: ""
 };
+const LOAD_ANNOTATIONS_ON_GENERATE = false;
 
 function normalizeYears(yearsFromApi) {
   const years = Array.isArray(yearsFromApi) ? yearsFromApi : [];
@@ -24,16 +26,59 @@ function normalizeYears(yearsFromApi) {
   return Array.from(merged).sort((a, b) => b - a);
 }
 
-function filterReportRowsClient(report, nameQuery, mrQuery) {
-  const nameQ = String(nameQuery || "").trim().toLowerCase();
-  const mrQ = String(mrQuery || "").trim().toLowerCase();
-  if (!nameQ && !mrQ) return report;
-  const rows = report.rows.filter((row) => {
-    const matchMr = !mrQ || String(row.mrNumber || "").toLowerCase().includes(mrQ);
-    const matchName = !nameQ || String(row.name || "").toLowerCase().includes(nameQ);
-    return matchMr && matchName;
+function normalizeString(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function getFacilityCandidates(row) {
+  const mr = String(row?.mrNumber || "").toUpperCase();
+  const loc = normalizeString(row?.locSummary);
+  const facilities = new Set();
+
+  if (mr.startsWith("MH")) {
+    facilities.add("RCA Mental Health");
+  }
+
+  if (mr.startsWith("2026")) {
+    // RBH mapping default
+    facilities.add("Riverside");
+    // A New Start mapping hint from location text
+    if (loc.includes("milton") || loc.includes("muse")) {
+      facilities.add("Milton");
+    }
+  }
+
+  if (mr.startsWith("OP")) {
+    // RBH mapping default
+    facilities.add("RCA Outpatient");
+    // A New Start mapping hint from location text
+    if (loc.includes("milton") || loc.includes("muse")) {
+      facilities.add("MUSE Outpatient");
+    }
+  }
+
+  return facilities;
+}
+
+function filterReportRowsClient(report, filters) {
+  const nameQ = normalizeString(filters?.name);
+  const mrQ = normalizeString(filters?.mrNumber);
+  const facilityQ = String(filters?.facility || "").trim();
+
+  const rows = (report?.rows || []).filter((row) => {
+    const matchesName = !nameQ || normalizeString(row?.name).includes(nameQ);
+    const matchesMr = !mrQ || normalizeString(row?.mrNumber).includes(mrQ);
+
+    if (!facilityQ) {
+      return matchesName && matchesMr;
+    }
+
+    const facilityCandidates = getFacilityCandidates(row);
+    const matchesFacility = facilityCandidates.has(facilityQ);
+    return matchesName && matchesMr && matchesFacility;
   });
-  return { ...report, rows };
+
+  return { ...(report || {}), rows };
 }
 
 export default function App() {
@@ -54,6 +99,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState("virtualized");
   const [cellSelection, setCellSelection] = useState(null);
   const [cellPanelOpen, setCellPanelOpen] = useState(true);
+  const [cellInstantLoading, setCellInstantLoading] = useState(false);
   const [cellAnnotations, setCellAnnotations] = useState({});
   const [annotationError, setAnnotationError] = useState("");
   const cellAnnotationsRef = useRef(cellAnnotations);
@@ -61,6 +107,11 @@ export default function App() {
   useEffect(() => {
     cellAnnotationsRef.current = cellAnnotations;
   }, [cellAnnotations]);
+
+  const onDayCellPointerDown = useCallback(() => {
+    setCellPanelOpen(true);
+    setCellInstantLoading(true);
+  }, []);
 
   const onDayCellClick = useCallback((payload) => {
     const h = payload?.dayHours;
@@ -72,6 +123,7 @@ export default function App() {
     } else {
       setCellPanelOpen(true);
     }
+    setTimeout(() => setCellInstantLoading(false), 180);
   }, []);
 
   const selectionStorageKey = useMemo(() => {
@@ -156,18 +208,22 @@ export default function App() {
       try {
         const data = await fetchReport(appliedFilters);
         setReport(data);
-        try {
-          const ann = await fetchCellAnnotations(appliedFilters);
-          const map = ann?.annotations && typeof ann.annotations === "object" ? ann.annotations : {};
-          setCellAnnotations(map);
-        } catch (annErr) {
-          const apiMsg = annErr?.response?.data?.error?.message;
-          setAnnotationError(
-            apiMsg ||
-              annErr?.message ||
-              "Could not load saved cell notes from the server. Complete and notes may be out of date until you reload."
-          );
-          setCellAnnotations({});
+        if (LOAD_ANNOTATIONS_ON_GENERATE) {
+          void (async () => {
+            try {
+              const ann = await fetchCellAnnotations(appliedFilters);
+              const map = ann?.annotations && typeof ann.annotations === "object" ? ann.annotations : {};
+              setCellAnnotations(map);
+            } catch (annErr) {
+              const apiMsg = annErr?.response?.data?.error?.message;
+              setAnnotationError(
+                apiMsg ||
+                  annErr?.message ||
+                  "Could not load saved cell notes from the server. Complete and notes may be out of date until you reload."
+              );
+              setCellAnnotations({});
+            }
+          })();
         }
       } catch (e) {
         const apiMsg = e?.response?.data?.error?.message;
@@ -231,16 +287,12 @@ export default function App() {
       fromMonth: normalizedFrom.month,
       toYear: normalizedTo.year,
       toMonth: normalizedTo.month,
-      name: String(filters.name || "").trim(),
-      mrNumber: String(filters.mrNumber || "").trim()
+      name: "",
+      mrNumber: ""
     });
   };
 
-  /** Name / MR: filter loaded report while typing. Generate still queries SQL with name + mrNumber. */
-  const displayReport = useMemo(
-    () => filterReportRowsClient(report, filters.name, filters.mrNumber),
-    [report, filters.name, filters.mrNumber]
-  );
+  const displayReport = useMemo(() => filterReportRowsClient(report, filters), [report, filters]);
 
   const onExport = () => {
     if (displayReport.rows.length === 0) return;
@@ -252,13 +304,13 @@ export default function App() {
   };
 
   return (
-    <main className="min-h-screen overflow-x-visible bg-slate-50 p-4 md:p-6">
-      <div className="mx-auto max-w-[1800px] space-y-4 overflow-x-visible">
-        <header className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h1 className="text-xl font-semibold text-slate-800 md:text-2xl">
+    <main className="min-h-screen overflow-x-visible bg-slate-50 p-1.5 md:p-2">
+      <div className="w-full space-y-2 overflow-x-visible">
+        <header className="rounded-md border border-slate-200 bg-white p-2.5 shadow-sm">
+          <h1 className="text-base font-semibold text-slate-800 md:text-lg">
             Monthly Session Hours Report
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-0.5 text-[11px] text-slate-500">
             Attendance/treatment calendar matrix grouped by MR Number.
           </p>
         </header>
@@ -309,29 +361,19 @@ export default function App() {
           </div>
         )}
 
-        {!loading && !error && hasGenerated && report.rows.length === 0 && (
+        {!loading && !error && hasGenerated && displayReport.rows.length === 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
             No rows found for the selected filters.
           </div>
         )}
 
-        {!loading &&
-          !error &&
-          hasGenerated &&
-          report.rows.length > 0 &&
-          displayReport.rows.length === 0 && (
-            <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
-              No rows match the current Name / MR Number on the loaded report. Clear those fields or click Generate to
-              query the database again.
-            </div>
-          )}
-
         {!loading && !error && hasGenerated && displayReport.rows.length > 0 && (
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-start">
             <div className="min-w-0 flex-1">
               <ReportTable
                 report={displayReport}
                 virtualized={viewMode === "virtualized"}
+                onDayCellPointerDown={onDayCellPointerDown}
                 onDayCellClick={onDayCellClick}
                 cellAnnotations={cellAnnotations}
               />
@@ -344,6 +386,7 @@ export default function App() {
                 cellNotes={selectionAnnotation.notes}
                 cellCompleted={selectionAnnotation.completed}
                 onCellStateChange={onCellStateChange}
+                forceLoading={cellInstantLoading}
               />
             ) : (
               <button
