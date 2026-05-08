@@ -30,6 +30,24 @@ function validateReportQuery(query) {
 
   const name = typeof query.name === "string" ? query.name.trim() : "";
   const mrNumber = typeof query.mrNumber === "string" ? query.mrNumber.trim() : "";
+  const locationIdsSource = query.locationIds ?? query.locationId;
+  const normalizedLocationIdsRaw = Array.isArray(locationIdsSource)
+    ? locationIdsSource
+    : typeof locationIdsSource === "string"
+      ? locationIdsSource.split(",")
+      : [];
+  const locationIds = normalizedLocationIdsRaw
+    .map((value) => Number(String(value).trim()))
+    .filter((value) => Number.isInteger(value));
+
+  const invalidLocationIds = normalizedLocationIdsRaw.some((value) => {
+    const trimmed = String(value).trim();
+    if (!trimmed) return false;
+    return !Number.isInteger(Number(trimmed));
+  });
+  if (invalidLocationIds) {
+    throw new AppError("locationIds must be comma-separated integers", 400);
+  }
 
   return {
     year: hasRange ? undefined : rawYear,
@@ -39,7 +57,8 @@ function validateReportQuery(query) {
     toYear,
     toMonth,
     name,
-    mrNumber
+    mrNumber,
+    locationIds
   };
 }
 

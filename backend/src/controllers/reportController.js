@@ -14,6 +14,9 @@ const {
 async function getReport(req, res, next) {
   try {
     const query = validateReportQuery(req.query);
+    if (!req.user?.admin) {
+      query.locationIds = Array.isArray(req.user?.facilities) ? req.user.facilities : [];
+    }
     const data = await getMonthlyReport(query);
     res.json(data);
   } catch (error) {

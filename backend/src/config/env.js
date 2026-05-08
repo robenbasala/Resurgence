@@ -9,6 +9,10 @@ const toBool = (value, fallback = false) => {
 
 module.exports = {
   port: Number(process.env.PORT) || 5000,
+  adminEmails: (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean),
   db: {
     server: process.env.DB_SERVER,
     instanceName: process.env.DB_INSTANCE || "",

@@ -11,7 +11,7 @@ function assertSafeViewName(viewName) {
   }
 }
 
-async function fetchReportRecords({ startDate, endDate, name, mrNumber }) {
+async function fetchReportRecords({ startDate, endDate, name, mrNumber, locationIds }) {
   assertSafeViewName(sessionHoursView);
   const pool = await getPool();
   const request = pool.request();
@@ -20,9 +20,19 @@ async function fetchReportRecords({ startDate, endDate, name, mrNumber }) {
   request.input("endDate", sql.Date, endDate);
   request.input("name", sql.NVarChar(255), name || null);
   request.input("mrNumber", sql.NVarChar(100), mrNumber || null);
+  request.input(
+    "locationIdsCsv",
+    sql.NVarChar(sql.MAX),
+    Array.isArray(locationIds) && locationIds.length > 0 ? locationIds.join(",") : null
+  );
 
   const query = `
     DECLARE @endExclusive date = DATEADD(day, 1, @endDate);
+    ;WITH selectedLocations AS (
+      SELECT DISTINCT TRY_CONVERT(int, value) AS location_id
+      FROM STRING_SPLIT(@locationIdsCsv, ',')
+      WHERE TRY_CONVERT(int, value) IS NOT NULL
+    )
 
     SELECT
       UniqueKey,
@@ -35,13 +45,38 @@ async function fetchReportRecords({ startDate, endDate, name, mrNumber }) {
       LOC,
       AuthStart,
       AuthEnd,
+      location_id,
+      location_name,
       DayDate,
-      TotalHours
+      SUM(COALESCE(TotalHours, 0)) AS TotalHours
     FROM ${sessionHoursView}
     WHERE DayDate >= @startDate
       AND DayDate < @endExclusive
       AND (@name IS NULL OR Name LIKE '%' + @name + '%')
-      AND (@mrNumber IS NULL OR CONVERT(nvarchar(100), [MR Number]) LIKE '%' + @mrNumber + '%');
+      AND (@mrNumber IS NULL OR CONVERT(nvarchar(100), [MR Number]) LIKE '%' + @mrNumber + '%')
+      AND (
+        @locationIdsCsv IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM selectedLocations sl
+          WHERE sl.location_id = location_id
+        )
+      )
+    GROUP BY
+      UniqueKey,
+      [MR Number],
+      PatientId,
+      Name,
+      Admit,
+      Discharge,
+      AuthorizationNumber,
+      LOC,
+      AuthStart,
+      AuthEnd,
+      location_id,
+      location_name,
+      DayDate
+    OPTION (RECOMPILE);
   `;
 
   const result = await request.query(query);

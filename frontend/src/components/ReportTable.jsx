@@ -233,7 +233,7 @@ function ReportTable({
           </span>
           {ann?.completed ? (
             <span
-              className="pointer-events-none absolute bottom-0.5 right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
+              className="pointer-events-none absolute bottom-px right-px flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[8px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
               title="Complete"
               aria-hidden
             >
@@ -322,7 +322,7 @@ function ReportTable({
           </span>
           {ann?.completed ? (
             <span
-              className="pointer-events-none absolute bottom-0.5 right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-white text-[11px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
+              className="pointer-events-none absolute bottom-px right-px flex h-3.5 w-3.5 items-center justify-center rounded-full bg-white text-[8px] font-bold leading-none text-emerald-600 shadow-sm ring-1 ring-slate-200/90"
               title="Complete"
               aria-hidden
             >

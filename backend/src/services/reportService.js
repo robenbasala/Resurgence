@@ -17,6 +17,8 @@ function createPatientRow(baseRecord, rowGroupKey) {
     authorizationNumber: baseRecord.AuthorizationNumber ?? "",
     authStart: normalizeDate(baseRecord.AuthStart),
     authEnd: normalizeDate(baseRecord.AuthEnd),
+    locationId: baseRecord.location_id ?? null,
+    locationName: baseRecord.location_name ?? "",
     locSummary: baseRecord.LOC ?? "",
     dailyEntries: {}
   };
@@ -58,7 +60,8 @@ async function getMonthlyReport({
   toYear,
   toMonth,
   name,
-  mrNumber
+  mrNumber,
+  locationIds
 }) {
   const hasRange = fromYear && fromMonth && toYear && toMonth;
   const { start, end, days } = hasRange
@@ -68,7 +71,8 @@ async function getMonthlyReport({
     startDate: start,
     endDate: end,
     name,
-    mrNumber
+    mrNumber,
+    locationIds
   });
 
   const rowMap = new Map();

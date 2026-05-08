@@ -3,6 +3,12 @@ import dayjs from "dayjs";
 import FiltersBar from "./components/FiltersBar";
 import ReportTable from "./components/ReportTable";
 import CellDetailPanel from "./components/CellDetailPanel";
+import LoginScreen from "./components/LoginScreen";
+import AdminPanel from "./components/AdminPanel";
+import InviteSignupScreen from "./components/InviteSignupScreen";
+import { onAuthStateChanged, signOut } from "firebase/auth";
+import { auth } from "./firebaseClient";
+import { fetchMe } from "./api/authApi";
 import { fetchCellAnnotations, fetchReport, fetchReportMeta, saveCellAnnotation } from "./api/reportApi";
 import { exportReportToCsv } from "./utils/csv";
 import { buildCellStateKey, getCellStateEntry, normalizeCellState } from "./utils/cellStateStorage";
@@ -16,7 +22,7 @@ const defaultFilters = {
   toMonth: initialNow.month() + 1,
   name: "",
   mrNumber: "",
-  facility: ""
+  facility: []
 };
 const LOAD_ANNOTATIONS_ON_GENERATE = false;
 
@@ -30,58 +36,63 @@ function normalizeString(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-function getFacilityCandidates(row) {
-  const mr = String(row?.mrNumber || "").toUpperCase();
-  const loc = normalizeString(row?.locSummary);
-  const facilities = new Set();
-
-  if (mr.startsWith("MH")) {
-    facilities.add("RCA Mental Health");
+function toSelectedLocationIds(facilityValues) {
+  const selected = Array.isArray(facilityValues) ? facilityValues : [];
+  const ids = new Set();
+  for (const item of selected) {
+    String(item || "")
+      .split(",")
+      .map((x) => Number(String(x).trim()))
+      .filter((x) => Number.isInteger(x))
+      .forEach((x) => ids.add(x));
   }
-
-  if (mr.startsWith("2026")) {
-    // RBH mapping default
-    facilities.add("Riverside");
-    // A New Start mapping hint from location text
-    if (loc.includes("milton") || loc.includes("muse")) {
-      facilities.add("Milton");
-    }
-  }
-
-  if (mr.startsWith("OP")) {
-    // RBH mapping default
-    facilities.add("RCA Outpatient");
-    // A New Start mapping hint from location text
-    if (loc.includes("milton") || loc.includes("muse")) {
-      facilities.add("MUSE Outpatient");
-    }
-  }
-
-  return facilities;
+  return ids;
 }
 
 function filterReportRowsClient(report, filters) {
   const nameQ = normalizeString(filters?.name);
   const mrQ = normalizeString(filters?.mrNumber);
-  const facilityQ = String(filters?.facility || "").trim();
+  const selectedLocationIds = toSelectedLocationIds(filters?.facility);
 
   const rows = (report?.rows || []).filter((row) => {
     const matchesName = !nameQ || normalizeString(row?.name).includes(nameQ);
     const matchesMr = !mrQ || normalizeString(row?.mrNumber).includes(mrQ);
-
-    if (!facilityQ) {
-      return matchesName && matchesMr;
-    }
-
-    const facilityCandidates = getFacilityCandidates(row);
-    const matchesFacility = facilityCandidates.has(facilityQ);
+    const rowLocationId = Number(row?.locationId);
+    const matchesFacility =
+      selectedLocationIds.size === 0 ||
+      (Number.isInteger(rowLocationId) && selectedLocationIds.has(rowLocationId));
     return matchesName && matchesMr && matchesFacility;
   });
 
   return { ...(report || {}), rows };
 }
 
+function buildAppliedFilters(nextFilters) {
+  const startValue = dayjs(`${nextFilters.fromYear}-${String(nextFilters.fromMonth).padStart(2, "0")}-01`);
+  const endValue = dayjs(`${nextFilters.toYear}-${String(nextFilters.toMonth).padStart(2, "0")}-01`);
+  const normalizedFrom = startValue.isAfter(endValue, "month")
+    ? { year: nextFilters.toYear, month: nextFilters.toMonth }
+    : { year: nextFilters.fromYear, month: nextFilters.fromMonth };
+  const normalizedTo = startValue.isAfter(endValue, "month")
+    ? { year: nextFilters.fromYear, month: nextFilters.fromMonth }
+    : { year: nextFilters.toYear, month: nextFilters.toMonth };
+
+  return {
+    fromYear: normalizedFrom.year,
+    fromMonth: normalizedFrom.month,
+    toYear: normalizedTo.year,
+    toMonth: normalizedTo.month,
+    name: "",
+    mrNumber: "",
+    locationIds: undefined
+  };
+}
+
 export default function App() {
+  const path = window.location.pathname;
+  const [authReady, setAuthReady] = useState(false);
+  const [authUser, setAuthUser] = useState(null);
+  const [screen, setScreen] = useState("report");
   const [filters, setFilters] = useState(defaultFilters);
   const [years, setYears] = useState(() => normalizeYears([]));
   const [report, setReport] = useState({
@@ -96,13 +107,38 @@ export default function App() {
   const [hasGenerated, setHasGenerated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [viewMode, setViewMode] = useState("virtualized");
+  const [viewMode, setViewMode] = useState("standard");
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [cellSelection, setCellSelection] = useState(null);
   const [cellPanelOpen, setCellPanelOpen] = useState(true);
   const [cellInstantLoading, setCellInstantLoading] = useState(false);
   const [cellAnnotations, setCellAnnotations] = useState({});
   const [annotationError, setAnnotationError] = useState("");
   const cellAnnotationsRef = useRef(cellAnnotations);
+  const profileMenuRef = useRef(null);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setAuthUser(null);
+        setAuthReady(true);
+        return;
+      }
+      try {
+        const me = await fetchMe();
+        setAuthUser(me.user || null);
+      } catch {
+        setAuthUser({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          name: firebaseUser.displayName || firebaseUser.email || ""
+        });
+      } finally {
+        setAuthReady(true);
+      }
+    });
+    return () => unsub();
+  }, []);
 
   useEffect(() => {
     cellAnnotationsRef.current = cellAnnotations;
@@ -178,6 +214,7 @@ export default function App() {
   );
 
   useEffect(() => {
+    if (!authUser) return;
     async function loadMeta() {
       try {
         const data = await fetchReportMeta();
@@ -195,7 +232,25 @@ export default function App() {
       }
     }
     loadMeta();
-  }, []);
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    function onDocMouseDown(e) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target)) {
+        setProfileMenuOpen(false);
+      }
+    }
+    function onDocKeyDown(e) {
+      if (e.key === "Escape") setProfileMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onDocKeyDown);
+    };
+  }, [profileMenuOpen]);
 
   useEffect(() => {
     if (!appliedFilters) return;
@@ -228,6 +283,7 @@ export default function App() {
       } catch (e) {
         const apiMsg = e?.response?.data?.error?.message;
         const netMsg = e?.message;
+        if (e?.response?.status === 401 || e?.response?.status === 403) setAuthUser(null);
         setError(
           apiMsg ||
             (netMsg && netMsg !== "Network Error" ? netMsg : null) ||
@@ -271,25 +327,9 @@ export default function App() {
 
   const onGenerate = () => {
     setHasGenerated(true);
-    const startValue = dayjs(`${filters.fromYear}-${String(filters.fromMonth).padStart(2, "0")}-01`);
-    const endValue = dayjs(`${filters.toYear}-${String(filters.toMonth).padStart(2, "0")}-01`);
-    const normalizedFrom = startValue.isAfter(endValue, "month")
-      ? { year: filters.toYear, month: filters.toMonth }
-      : { year: filters.fromYear, month: filters.fromMonth };
-    const normalizedTo = startValue.isAfter(endValue, "month")
-      ? { year: filters.fromYear, month: filters.fromMonth }
-      : { year: filters.toYear, month: filters.toMonth };
-
     setCellSelection(null);
     setCellPanelOpen(true);
-    setAppliedFilters({
-      fromYear: normalizedFrom.year,
-      fromMonth: normalizedFrom.month,
-      toYear: normalizedTo.year,
-      toMonth: normalizedTo.month,
-      name: "",
-      mrNumber: ""
-    });
+    setAppliedFilters(buildAppliedFilters(filters));
   };
 
   const displayReport = useMemo(() => filterReportRowsClient(report, filters), [report, filters]);
@@ -303,38 +343,118 @@ export default function App() {
     setViewMode((prev) => (prev === "virtualized" ? "standard" : "virtualized"));
   };
 
+  const onLogout = () => {
+    void signOut(auth);
+    setHasGenerated(false);
+    setAppliedFilters(null);
+    setReport({
+      fromYear: defaultFilters.fromYear,
+      fromMonth: defaultFilters.fromMonth,
+      toYear: defaultFilters.toYear,
+      toMonth: defaultFilters.toMonth,
+      days: [],
+      rows: []
+    });
+  };
+
+  if (path === "/signup") {
+    return <InviteSignupScreen />;
+  }
+
+  if (!authReady) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <p className="text-sm text-slate-500">Checking session...</p>
+      </main>
+    );
+  }
+
+  if (!authUser) {
+    return <LoginScreen />;
+  }
+
   return (
     <main className="min-h-screen overflow-x-visible bg-slate-50 p-1.5 md:p-2">
       <div className="w-full space-y-2 overflow-x-visible">
-        <header className="rounded-md border border-slate-200 bg-white p-2.5 shadow-sm">
-          <h1 className="text-base font-semibold text-slate-800 md:text-lg">
-            Monthly Session Hours Report
-          </h1>
-          <p className="mt-0.5 text-[11px] text-slate-500">
-            Attendance/treatment calendar matrix grouped by MR Number.
-          </p>
+        <header className="rounded-xl border border-slate-200/90 bg-white px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div>
+                <h1 className="text-sm font-semibold text-slate-900 md:text-base">Monthly Session Hours Report</h1>
+                <p className="text-[11px] text-slate-500">Welcome back, {authUser.name || authUser.email || "User"}</p>
+              </div>
+            </div>
+
+            <div ref={profileMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setProfileMenuOpen((v) => !v)}
+                className="flex items-center gap-2 rounded-full border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-slate-200 text-[11px] font-semibold text-slate-700">
+                  {String(authUser.name || authUser.email || "U")
+                    .trim()
+                    .slice(0, 1)
+                    .toUpperCase()}
+                </span>
+                <span className="max-w-[12rem] truncate">{authUser.name || authUser.email || "Account"}</span>
+                <span className="text-slate-400">▾</span>
+              </button>
+
+              {profileMenuOpen ? (
+                <div className="absolute right-0 z-[260] mt-1.5 w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl">
+                  {authUser.admin ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setScreen((prev) => (prev === "report" ? "admin" : "report"));
+                        setProfileMenuOpen(false);
+                      }}
+                      className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      {screen === "admin" ? "Open Report" : "Admin"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      onLogout();
+                    }}
+                    className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </header>
 
-        <FiltersBar
-          filters={filters}
-          years={years}
-          onChange={onChangeFilter}
-          onMonthRangeApply={onMonthRangeApply}
-          onClearMonthRange={onClearMonthRange}
-          onGenerate={onGenerate}
-          onExport={onExport}
-          viewMode={viewMode}
-          onToggleViewMode={onToggleViewMode}
-          loading={loading}
-        />
+        {screen === "report" ? (
+          <FiltersBar
+            filters={filters}
+            years={years}
+            onChange={onChangeFilter}
+            onMonthRangeApply={onMonthRangeApply}
+            onClearMonthRange={onClearMonthRange}
+            onGenerate={onGenerate}
+            onExport={onExport}
+            viewMode={viewMode}
+            onToggleViewMode={onToggleViewMode}
+            loading={loading}
+          />
+        ) : (
+          <AdminPanel />
+        )}
 
-        {annotationError && (
+        {screen === "report" && annotationError && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
             {annotationError}
           </div>
         )}
 
-        {loading && (
+        {screen === "report" && loading && (
           <div
             className="flex flex-col items-center justify-center gap-5 rounded-2xl border border-slate-200/80 bg-white/80 py-16 shadow-[0_8px_30px_-12px_rgba(15,118,110,0.12)] backdrop-blur-sm"
             role="status"
@@ -355,19 +475,19 @@ export default function App() {
           </div>
         )}
 
-        {!loading && error && (
+        {screen === "report" && !loading && error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-700 shadow-sm">
             {error}
           </div>
         )}
 
-        {!loading && !error && hasGenerated && displayReport.rows.length === 0 && (
+        {screen === "report" && !loading && !error && hasGenerated && displayReport.rows.length === 0 && (
           <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
             No rows found for the selected filters.
           </div>
         )}
 
-        {!loading && !error && hasGenerated && displayReport.rows.length > 0 && (
+        {screen === "report" && !loading && !error && hasGenerated && displayReport.rows.length > 0 && (
           <div className="flex flex-col gap-2 lg:flex-row lg:items-start">
             <div className="min-w-0 flex-1">
               <ReportTable
